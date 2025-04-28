@@ -122,9 +122,9 @@ builder.Services.AddMassTransit(x =>
         cfg.ReceiveEndpoint("saga-global-dlq", e =>
         {
             // Simple handler to log all dead-lettered messages
-            e.Handler<object>(async context =>
+            e.Handler<DeadLetterMessage>(async context =>
             {
-                var logger = context.GetPayload<ILogger<object>>();
+                var logger = context.GetPayload<ILogger<DeadLetterMessage>>();
                 logger.LogError("Dead-lettered message received: {MessageId}", context.MessageId);
                 // Additional handling logic can be added here (alerts, manual intervention, etc.)
             });
