@@ -22,23 +22,6 @@ service:
 deployment:
   name: saga-orchestrator-deployment
 
-# Tên ingress tùy chỉnh
-ingress:
-  enabled: true
-  name: saga-orchestrator-ingress
-  ingressClassName: nginx
-  hostname: saga-orchestrator.cuder.xyz
-  path: /
-  pathType: Prefix
-  annotations:
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"
-    nginx.ingress.kubernetes.io/ssl-redirect: "false"
-  tls: true
-  extraTls:
-    - hosts:
-        - saga-orchestrator.cuder.xyz
-      secretName: saga-orchestrator-tls
-
 containerPorts:
   http: 8080
 
