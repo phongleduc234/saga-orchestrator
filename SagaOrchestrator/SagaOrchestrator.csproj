@@ -11,6 +11,7 @@
   <ItemGroup>
     <PackageReference Include="AspNetCore.HealthChecks.NpgSql" Version="8.0.2" />
     <PackageReference Include="AspNetCore.HealthChecks.Rabbitmq" Version="8.0.2" />
+    <PackageReference Include="Cuder.SharedContracts" Version="1.0.1" />
     <PackageReference Include="MassTransit.EntityFrameworkCore" Version="8.4.0" />
     <PackageReference Include="MassTransit.RabbitMQ" Version="8.4.0" />
     <PackageReference Include="MassTransit.SqlTransport.PostgreSQL" Version="8.4.0" />
@@ -22,10 +23,6 @@
 
   <ItemGroup>
     <Folder Include="Controllers\" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\..\SharedContracts\SharedContracts\SharedContracts.csproj" />
   </ItemGroup>
 
 </Project>

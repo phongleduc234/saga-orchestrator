@@ -7,18 +7,14 @@ image:
 replicaCount: 1
 
 # Thêm các tùy chỉnh tên
-nameOverride: "dotnet-core-api"
-fullnameOverride: "saga-orchestrator-service"
+nameOverride: "saga-orchestrator"
 
 imagePullSecrets:
   - name: regcred
 
-hostNetwork: true
-dnsPolicy: ClusterFirstWithHostNet
-
 service:
   type: ClusterIP
-  port: 8083
+  port: 8080
   targetPort: 8080
   name: saga-orchestrator-service
 
@@ -37,7 +33,6 @@ ingress:
   annotations:
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
     nginx.ingress.kubernetes.io/ssl-redirect: "false"
-    nginx.ingress.kubernetes.io/rewrite-target: /$2
   tls: true
   extraTls:
     - hosts:
@@ -45,13 +40,78 @@ ingress:
       secretName: saga-orchestrator-tls
 
 containerPorts:
-  http: 8083
+  http: 8080
 
 # Môi trường từ Secret
 extraEnvVarsFromSecret:
   - secretName: saga-orchestrator-secret
     name: ConnectionStrings__DefaultConnection
     envVar: ConnectionStrings__DefaultConnection
+
+    
+  - secretName: shared-secret
+    name: SmtpMail__UserName
+    envVar: SmtpMail__UserName
+
+  - secretName: shared-secret
+    name: SmtpMail__Password
+    envVar: SmtpMail__Password
+    
+  - secretName: shared-secret
+    name: SmtpMail__Host
+    envVar: SmtpMail__Host
+
+  - secretName: shared-secret
+    name: SmtpMail__Port
+    envVar: SmtpMail__Port
+
+  - secretName: shared-secret
+    name: SmtpMail__FromEmail
+    envVar: SmtpMail__FromEmail
+
+  - secretName: shared-secret
+    name: SmtpMail__FromName
+    envVar: SmtpMail__FromName
+
+  - secretName: shared-secret
+    name: SmtpMail__SenderEmail
+    envVar: SmtpMail__SenderEmail
+
+  - secretName: shared-secret
+    name: Telegram__BotToken
+    envVar: Telegram__BotToken
+
+  - secretName: shared-secret
+    name: Telegram__ChatId
+    envVar: Telegram__ChatId
+
+  - secretName: shared-secret
+    name: Telegram__AutoSetWebhook
+    envVar: Telegram__AutoSetWebhook
+
+  - secretName: shared-secret
+    name: Telegram__WebhookBaseUrl
+    envVar: Telegram__WebhookBaseUrl
+
+  - secretName: shared-secret
+    name: Redis__Host
+    envVar: Redis__Host
+
+  - secretName: shared-secret
+    name: Redis__Port
+    envVar: Redis__Port
+
+  - secretName: shared-secret
+    name: Redis__Password
+    envVar: Redis__Password
+
+  - secretName: shared-secret
+    name: RabbitMq__Host
+    envVar: RabbitMq__Host
+
+  - secretName: shared-secret
+    name: RabbitMq__Port
+    envVar: RabbitMq__Port
 
   - secretName: shared-secret
     name: RabbitMq__UserName
@@ -64,20 +124,40 @@ extraEnvVarsFromSecret:
 # Môi trường từ ConfigMap
 extraEnvVarsFromConfigMap:
   - configMapName: shared-config
-    name: RabbitMq__Host
-    envVar: RabbitMq__Host
-
-  - configMapName: shared-config
-    name: RabbitMq__Port
-    envVar: RabbitMq__Port
-
-  - configMapName: shared-config
     name: Logging__LogLevel__Default
     envVar: Logging__LogLevel__Default
 
   - configMapName: shared-config
     name: Logging__LogLevel__Microsoft.AspNetCore
     envVar: Logging__LogLevel__Microsoft.AspNetCore
+
+  - configMapName: shared-config
+    name: Serilog__MinimumLevel__Default
+    envVar: Serilog__MinimumLevel__Default
+
+  - configMapName: shared-config
+    name: Serilog__MinimumLevel__Override__Microsoft
+    envVar: Serilog__MinimumLevel__Override__Microsoft
+
+  - configMapName: shared-config
+    name: Serilog__MinimumLevel__Override__Microsoft.Hosting.Lifetime
+    envVar: Serilog__MinimumLevel__Override__Microsoft.Hosting.Lifetime
+
+  - configMapName: shared-config
+    name: Serilog__MinimumLevel__Override__System
+    envVar: Serilog__MinimumLevel__Override__System
+
+  - configMapName: shared-config
+    name: Serilog__Enrich
+    envVar: Serilog__Enrich
+
+  - configMapName: shared-config
+    name: ServiceUrl__FluentBit
+    envVar: ServiceUrl__FluentBit
+
+  - configMapName: shared-config
+    name: ServiceUrl__OpenTelemetry
+    envVar: ServiceUrl__OpenTelemetry
 
 # Biến môi trường cố định
 extraEnvVars:
