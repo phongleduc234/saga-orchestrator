@@ -1,6 +1,10 @@
 ﻿using MassTransit;
 using SharedContracts.Events;
 using SharedContracts.Models;
+using SagaOrchestrator.Policies;
+using SagaOrchestrator.Handlers;
+using System.Text.Json;
+using Polly;
 
 namespace SagaOrchestrator.StateMachines
 {
@@ -11,9 +15,17 @@ namespace SagaOrchestrator.StateMachines
     /// </summary>
     public class OrderSaga : MassTransitStateMachine<OrderSagaState>
     {
-        public OrderSaga(ILogger<OrderSaga> logger)
+        private readonly ILogger<OrderSaga> _logger;
+        private readonly IAsyncPolicy _resiliencePolicy;
+        private readonly DeadLetterQueueHandler _deadLetterHandler;
+
+        public OrderSaga(
+            ILogger<OrderSaga> logger,
+            DeadLetterQueueHandler deadLetterHandler)
         {
-            logger.LogInformation("OrderSaga state machine registered");
+            _logger = logger;
+            _deadLetterHandler = deadLetterHandler;
+            _resiliencePolicy = ResiliencePolicy.CreateResiliencePolicy(logger);
 
             // Define the state property used to persist the current state of the saga
             InstanceState(x => x.CurrentState);
@@ -29,14 +41,31 @@ namespace SagaOrchestrator.StateMachines
             // STEP 1: Initial State - Handle OrderCreated event
             Initially(
                 When(OrderCreated)
-                    .Then(context => {
-                        // Initialize saga state with order information
-                        logger.LogInformation($"Order created: {context.Message.OrderId}");
-                        context.Saga.OrderId = context.Message.OrderId;
-                        context.Saga.CorrelationId = context.Message.CorrelationId;
-                        context.Saga.Created = DateTime.UtcNow;
-                        context.Saga.PaymentCompleted = false;
-                        context.Saga.InventoryUpdated = false;
+                    .Then(async context => {
+                        try
+                        {
+                            await _resiliencePolicy.ExecuteAsync(async () =>
+                            {
+                                _logger.LogInformation($"Order created: {context.Message.OrderId}");
+                                context.Saga.OrderId = context.Message.OrderId;
+                                context.Saga.CorrelationId = context.Message.CorrelationId;
+                                context.Saga.Amount = context.Message.Amount;
+                                context.Saga.Items = context.Message.Items;
+                                context.Saga.Created = DateTime.UtcNow;
+                                context.Saga.PaymentCompleted = false;
+                                context.Saga.InventoryUpdated = false;
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, $"Error processing OrderCreated event for order {context.Message.OrderId}");
+                            await _deadLetterHandler.HandleFailedMessage(
+                                JsonSerializer.Serialize(context.Message),
+                                ex.Message,
+                                "OrderCreated"
+                            );
+                            throw;
+                        }
                     })
                     // Move to OrderReceived state
                     .TransitionTo(OrderReceived)
@@ -44,16 +73,31 @@ namespace SagaOrchestrator.StateMachines
                     .Publish(context => new ProcessPaymentRequest(
                         context.Message.CorrelationId,
                         context.Message.OrderId,
-                        100.0m)) // Amount hardcoded for demo purposes
+                        context.Message.Amount))
             );
 
             // STEP 2: Payment Processing - Handle PaymentProcessed event
             During(OrderReceived,
                 When(PaymentProcessed)
-                    .Then(context => {
-                        // Update saga state with payment result
-                        logger.LogInformation($"Payment processed for order {context.Message.OrderId}: Success = {context.Message.Success}");
-                        context.Saga.PaymentCompleted = context.Message.Success;
+                    .Then(async context => {
+                        try
+                        {
+                            await _resiliencePolicy.ExecuteAsync(async () =>
+                            {
+                                _logger.LogInformation($"Payment processed for order {context.Message.OrderId}: Success = {context.Message.Success}");
+                                context.Saga.PaymentCompleted = context.Message.Success;
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, $"Error processing PaymentProcessed event for order {context.Message.OrderId}");
+                            await _deadLetterHandler.HandleFailedMessage(
+                                JsonSerializer.Serialize(context.Message),
+                                ex.Message,
+                                "PaymentProcessed"
+                            );
+                            throw;
+                        }
                     })
                     // If payment succeeded, continue to inventory reservation
                     .If(context => context.Message.Success,
@@ -61,9 +105,7 @@ namespace SagaOrchestrator.StateMachines
                             .Publish(context => new UpdateInventory(
                                 context.Message.CorrelationId,
                                 context.Message.OrderId,
-                                new List<OrderItem> {
-                                    new OrderItem { ProductId = "prod_123", Quantity = 2 } // Demo product data
-                                })))
+                                context.Saga.Items)))
                     // If payment failed, initiate compensation for the order
                     .IfElse(context => !context.Message.Success,
                         x => x.TransitionTo(PaymentFailed)
@@ -76,10 +118,25 @@ namespace SagaOrchestrator.StateMachines
             // STEP 3: Inventory Processing - Handle InventoryUpdated event
             During(PaymentCompleted,
                 When(InventoryUpdated)
-                    .Then(context => {
-                        // Update saga state with inventory result
-                        logger.LogInformation($"Inventory updated for order {context.Message.OrderId}: Success = {context.Message.Success}");
-                        context.Saga.InventoryUpdated = context.Message.Success;
+                    .Then(async context => {
+                        try
+                        {
+                            await _resiliencePolicy.ExecuteAsync(async () =>
+                            {
+                                _logger.LogInformation($"Inventory updated for order {context.Message.OrderId}: Success = {context.Message.Success}");
+                                context.Saga.InventoryUpdated = context.Message.Success;
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, $"Error processing InventoryUpdated event for order {context.Message.OrderId}");
+                            await _deadLetterHandler.HandleFailedMessage(
+                                JsonSerializer.Serialize(context.Message),
+                                ex.Message,
+                                "InventoryUpdated"
+                            );
+                            throw;
+                        }
                     })
                     // If inventory succeeded, complete the order process
                     .If(context => context.Message.Success,
@@ -106,20 +163,76 @@ namespace SagaOrchestrator.StateMachines
             // STEP 4.1: Handle PaymentCompensated event during inventory failure
             During(InventoryFailed,
                 When(PaymentCompensated)
-                    .Then(context => {
-                        // Log payment compensation result
-                        logger.LogInformation($"Payment compensated for order {context.Message.OrderId}: Success = {context.Message.Success}");
+                    .Then(async context => {
+                        try
+                        {
+                            await _resiliencePolicy.ExecuteAsync(async () =>
+                            {
+                                _logger.LogInformation($"Payment compensated for order {context.Message.OrderId}: Success = {context.Message.Success}");
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, $"Error processing PaymentCompensated event for order {context.Message.OrderId}");
+                            await _deadLetterHandler.HandleFailedMessage(
+                                JsonSerializer.Serialize(context.Message),
+                                ex.Message,
+                                "PaymentCompensated"
+                            );
+                            throw;
+                        }
                     })
                     // Move to failed state
                     .TransitionTo(OrderFailed)
             );
 
-            // STEP 4.2: Handle OrderCompensated event during failure
+            // STEP 4.2: Handle InventoryCompensated event during payment failure
+            During(PaymentFailed,
+                When(InventoryCompensated)
+                    .Then(async context => {
+                        try
+                        {
+                            await _resiliencePolicy.ExecuteAsync(async () =>
+                            {
+                                _logger.LogInformation($"Inventory compensated for order {context.Message.OrderId}: Success = {context.Message.Success}");
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, $"Error processing InventoryCompensated event for order {context.Message.OrderId}");
+                            await _deadLetterHandler.HandleFailedMessage(
+                                JsonSerializer.Serialize(context.Message),
+                                ex.Message,
+                                "InventoryCompensated"
+                            );
+                            throw;
+                        }
+                    })
+                    // Move to failed state
+                    .TransitionTo(OrderFailed)
+            );
+
+            // STEP 4.3: Handle OrderCompensated event during failure
             During(PaymentFailed, OrderFailed,
                 When(OrderCompensated)
-                    .Then(context => {
-                        // Log order compensation result
-                        logger.LogInformation($"Order compensated: {context.Message.OrderId}");
+                    .Then(async context => {
+                        try
+                        {
+                            await _resiliencePolicy.ExecuteAsync(async () =>
+                            {
+                                _logger.LogInformation($"Order compensated: {context.Message.OrderId}");
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, $"Error processing OrderCompensated event for order {context.Message.OrderId}");
+                            await _deadLetterHandler.HandleFailedMessage(
+                                JsonSerializer.Serialize(context.Message),
+                                ex.Message,
+                                "OrderCompensated"
+                            );
+                            throw;
+                        }
                     })
                     // Finalize the saga (mark as complete)
                     .Finalize()

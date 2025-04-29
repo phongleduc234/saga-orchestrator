@@ -1,10 +1,19 @@
 ﻿using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using SagaOrchestrator.Data;
+using SagaOrchestrator.Handlers;
+using SagaOrchestrator.Models;
+using SagaOrchestrator.Services;
 using SagaOrchestrator.StateMachines;
 using SharedContracts.Models;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Configuration
+    .SetBasePath(AppContext.BaseDirectory)
+    .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+    .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: false, reloadOnChange: true)
+    .AddEnvironmentVariables();
 
 // Configure Entity Framework and PostgreSQL for saga state persistence
 builder.Services.AddDbContext<SagaDbContext>(options =>
@@ -15,6 +24,10 @@ builder.Services.AddHttpClient();
 
 // Register controllers for potential API endpoints
 builder.Services.AddControllers();
+
+// Register Dead Letter Queue services
+builder.Services.AddScoped<IDeadLetterQueueHandler, DeadLetterQueueHandler>();
+builder.Services.AddHostedService<DeadLetterQueueProcessor>();
 
 // Configure MassTransit for saga orchestration
 builder.Services.AddMassTransit(x =>
@@ -48,89 +61,53 @@ builder.Services.AddMassTransit(x =>
             h.Password(password);
         });
 
-        // Configure global error handling and retry policies
-        cfg.UseDelayedRedelivery(r => r.Intervals(
-            TimeSpan.FromMinutes(1),
-            TimeSpan.FromMinutes(5),
-            TimeSpan.FromMinutes(15)
-        ));
-        cfg.UseMessageRetry(r => r.Interval(3, TimeSpan.FromSeconds(5)));
-
-        // ENDPOINT CONFIGURATIONS FOR SAGA STATE MACHINE
-
-        // 1. OrderCreated Event - Initiates the saga
+        // Configure endpoints for saga state machine
         cfg.ReceiveEndpoint("order-created", e =>
         {
             e.ConfigureSaga<OrderSagaState>(context);
-            e.UseMessageRetry(r => r.Interval(5, TimeSpan.FromSeconds(1)));
-            e.BindDeadLetterQueue("order-created-saga-dlq", "order-created-saga-dlx", x => {
-                x.Durable = true;
-            });
+            e.BindDeadLetterQueue("order-created-saga-dlq", "order-created-saga-dlx", x => x.Durable = true);
         });
 
-        // 2. PaymentProcessed Event - The result of payment processing
         cfg.ReceiveEndpoint("payment-processed", e =>
         {
             e.ConfigureSaga<OrderSagaState>(context);
-            e.UseMessageRetry(r => r.Interval(5, TimeSpan.FromSeconds(1)));
-            e.BindDeadLetterQueue("payment-processed-dlq", "payment-processed-dlx", x => {
-                x.Durable = true;
-            });
+            e.BindDeadLetterQueue("payment-processed-dlq", "payment-processed-dlx", x => x.Durable = true);
         });
 
-        // 3. InventoryUpdated Event - The result of inventory reservation
         cfg.ReceiveEndpoint("inventory-updated", e =>
         {
             e.ConfigureSaga<OrderSagaState>(context);
-            e.UseMessageRetry(r => r.Interval(5, TimeSpan.FromSeconds(1)));
-            e.BindDeadLetterQueue("inventory-updated-dlq", "inventory-updated-dlx", x => {
-                x.Durable = true;
-            });
+            e.BindDeadLetterQueue("inventory-updated-dlq", "inventory-updated-dlx", x => x.Durable = true);
         });
 
-        // 4. PaymentCompensated Event - The result of payment compensation
         cfg.ReceiveEndpoint("payment-compensated", e =>
         {
             e.ConfigureSaga<OrderSagaState>(context);
-            e.UseMessageRetry(r => r.Interval(5, TimeSpan.FromSeconds(1)));
-            e.BindDeadLetterQueue("payment-compensated-dlq", "payment-compensated-dlx", x => {
-                x.Durable = true;
-            });
+            e.BindDeadLetterQueue("payment-compensated-dlq", "payment-compensated-dlx", x => x.Durable = true);
         });
 
-        // 5. InventoryCompensated Event - The result of inventory compensation
         cfg.ReceiveEndpoint("inventory-compensated", e =>
         {
             e.ConfigureSaga<OrderSagaState>(context);
-            e.UseMessageRetry(r => r.Interval(5, TimeSpan.FromSeconds(1)));
-            e.BindDeadLetterQueue("inventory-compensated-dlq", "inventory-compensated-dlx", x => {
-                x.Durable = true;
-            });
+            e.BindDeadLetterQueue("inventory-compensated-dlq", "inventory-compensated-dlx", x => x.Durable = true);
         });
 
-        // 6. OrderCompensated Event - The result of order compensation
         cfg.ReceiveEndpoint("order-compensated", e =>
         {
             e.ConfigureSaga<OrderSagaState>(context);
-            e.UseMessageRetry(r => r.Interval(5, TimeSpan.FromSeconds(1)));
-            e.BindDeadLetterQueue("order-compensated-dlq", "order-compensated-dlx", x => {
-                x.Durable = true;
-            });
+            e.BindDeadLetterQueue("order-compensated-dlq", "order-compensated-dlx", x => x.Durable = true);
         });
 
-        // Global Dead Letter Queue handler - Processes all dead-lettered messages
+        // Global Dead Letter Queue handler
         cfg.ReceiveEndpoint("saga-global-dlq", e =>
         {
-            // Simple handler to log all dead-lettered messages
             e.Handler<DeadLetterMessage>(async context =>
             {
                 var logger = context.GetPayload<ILogger<DeadLetterMessage>>();
                 logger.LogError("Dead-lettered message received: {MessageId}", context.MessageId);
-                // Additional handling logic can be added here (alerts, manual intervention, etc.)
             });
 
-            // Bind to all DLQs configured above
-            e.Bind("order-created-saga-dlq");  // Note: Changed from "order-saga-dlq" for consistency
+            e.Bind("order-created-saga-dlq");
             e.Bind("payment-processed-dlq");
             e.Bind("inventory-updated-dlq");
             e.Bind("payment-compensated-dlq");
